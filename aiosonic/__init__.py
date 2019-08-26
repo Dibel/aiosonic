@@ -199,7 +199,7 @@ class HttpResponse:
 
     async def json(self, json_decoder=loads) -> dict:
         """Read response body."""
-        assert 'application/json' in self.headers['content-type'].lower()
+        # assert 'application/json' in self.headers['content-type'].lower()
         body = await self.content()
         return json_decoder(body)
 
@@ -308,21 +308,25 @@ async def _send_chunks(connection: Connection, body: BodyType):
 
 
 async def _send_multipart(data: Dict[str, str], boundary: str,
-                          headers: HeadersType,
-                          chunk_size: int = _CHUNK_SIZE) -> bytes:
+                          headers: HeadersType, stream: bool = False,
+                          chunk_size: int = _CHUNK_SIZE
+                          ) -> AsyncIterator[bytes]:
     """Send multipart data by streaming."""
-    # TODO: precalculate body size and stream request, precalculate file sizes by os.path.getsize
     to_send = b''
+
     for key, val in data.items():
         # write --boundary + field
         to_send += ('--%s%s' % (boundary, _NEW_LINE)).encode()
+
         if isinstance(val, IOBase):
-            # TODO: Utility to accept files with multipart metadata (Content-Type, custom filename, ...),
+            # TODO: Utility to accept files with multipart metadata
+            # (Content-Type, custom filename, ...),
             # write Contet-Disposition
             to_write = 'Content-Disposition: form-data; ' + \
                 'name="%s"; filename="%s"%s%s' % (
                     key, basename(val.name), _NEW_LINE, _NEW_LINE)
             to_send += to_write.encode()
+
             # read and write chunks
             loop = asyncio.get_event_loop()
             while True:
@@ -331,6 +335,10 @@ async def _send_multipart(data: Dict[str, str], boundary: str,
                 if not data:
                     break
                 to_send += data
+
+                if stream:
+                    yield to_send
+                    to_send = b''
             val.close()
         else:
             to_send += (
@@ -342,16 +350,20 @@ async def _send_multipart(data: Dict[str, str], boundary: str,
             ).encode()
             to_send += val.encode() + _NEW_LINE.encode()
 
+            if stream:
+                yield to_send
+                to_send = b''
+
     # write --boundary-- for finish
     to_send += ('--%s--' % boundary).encode()
-    headers['Content-Length'] = str(len(to_send))
-    return to_send
+    yield to_send
 
 
 async def _do_request(urlparsed: ParseResult, headers_data: str,
                       connector: TCPConnector, body: Optional[ParsedBodyType],
                       verify: bool, ssl: Optional[SSLContext],
-                      timeouts: Timeouts, follow: bool) -> HttpResponse:
+                      timeouts: Optional[Timeouts], follow: bool,
+                      stream: bool = False) -> HttpResponse:
     """Something."""
     async with (await connector.acquire(urlparsed)) as connection:
         await connection.connect(urlparsed, verify, ssl, timeouts)
@@ -412,7 +424,7 @@ async def _request_with_body(
         params: ParamsType = None, connector: TCPConnector = None,
         json_serializer=dumps, multipart: bool = False,
         verify: bool = True, ssl: SSLContext = None, timeouts: Timeouts = None,
-        follow: bool = False) -> HttpResponse:
+        follow: bool = False, stream: bool = False) -> HttpResponse:
     """Do post http request. """
     if not data and not json:
         TypeError('missing argument, either "json" or "data"')
@@ -424,7 +436,7 @@ async def _request_with_body(
         })
     return await request(url, method, headers, params, data, connector,
                          multipart, verify=verify, ssl=ssl, follow=follow,
-                         timeouts=timeouts)
+                         timeouts=timeouts, stream=stream)
 
 
 # Module methods
@@ -444,11 +456,12 @@ async def post(url: str, data: DataType = None, headers: HeadersType = None,
                connector: TCPConnector = None, json_serializer=dumps,
                multipart: bool = False, verify: bool = True,
                ssl: SSLContext = None, timeouts: Timeouts = None,
-               follow: bool = False) -> HttpResponse:
+               follow: bool = False, stream: bool = False) -> HttpResponse:
     """Do post http request. """
     return await _request_with_body(
         url, 'POST', data, headers, json, params, connector, json_serializer,
-        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts)
+        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts,
+        stream=stream)
 
 
 async def put(url: str, data: DataType = None, headers: HeadersType = None,
@@ -456,11 +469,12 @@ async def put(url: str, data: DataType = None, headers: HeadersType = None,
               connector: TCPConnector = None, json_serializer=dumps,
               multipart: bool = False, verify: bool = True,
               ssl: SSLContext = None, timeouts: Timeouts = None,
-              follow: bool = False) -> HttpResponse:
+              follow: bool = False, stream: bool = False) -> HttpResponse:
     """Do put http request. """
     return await _request_with_body(
         url, 'PUT', data, headers, json, params, connector, json_serializer,
-        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts)
+        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts,
+        stream=stream)
 
 
 async def patch(url: str, data: DataType = None, headers: HeadersType = None,
@@ -468,11 +482,12 @@ async def patch(url: str, data: DataType = None, headers: HeadersType = None,
                 connector: TCPConnector = None, json_serializer=dumps,
                 multipart: bool = False, verify: bool = True,
                 ssl: SSLContext = None, timeouts: Timeouts = None,
-                follow: bool = False) -> HttpResponse:
+                follow: bool = False, stream: bool = False) -> HttpResponse:
     """Do patch http request. """
     return await _request_with_body(
         url, 'PATCH', data, headers, json, params, connector, json_serializer,
-        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts)
+        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts,
+        stream=stream)
 
 
 async def delete(url: str, data: DataType = b'', headers: HeadersType = None,
@@ -480,11 +495,12 @@ async def delete(url: str, data: DataType = b'', headers: HeadersType = None,
                  connector: TCPConnector = None, json_serializer=dumps,
                  multipart: bool = False, verify: bool = True,
                  ssl: SSLContext = None, timeouts: Timeouts = None,
-                 follow: bool = False) -> HttpResponse:
+                 follow: bool = False, stream: bool = False) -> HttpResponse:
     """Do delete http request. """
     return await _request_with_body(
         url, 'DELETE', data, headers, json, params, connector, json_serializer,
-        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts)
+        multipart, verify=verify, ssl=ssl, follow=follow, timeouts=timeouts,
+        stream=stream)
 
 
 async def request(url: str, method: str = 'GET', headers: HeadersType = None,
@@ -492,7 +508,7 @@ async def request(url: str, method: str = 'GET', headers: HeadersType = None,
                   connector: TCPConnector = None, multipart: bool = False,
                   verify: bool = True,
                   ssl: SSLContext = None, timeouts: Timeouts = None,
-                  follow: bool = False) -> HttpResponse:
+                  follow: bool = False, stream: bool = False) -> HttpResponse:
     """Do http request.
 
     Steps:
@@ -517,7 +533,14 @@ async def request(url: str, method: str = 'GET', headers: HeadersType = None,
         if not isinstance(data, dict):
             raise ValueError('data should be dict')
         boundary = 'boundary-%d' % random.randint(10**8, 10**9)
-        body = await _send_multipart(data, boundary, headers)
+
+        if stream:
+            headers['content-encoding'] = 'chunked'
+            body = _send_multipart(data, boundary, headers, stream)
+        else:
+            generator = _send_multipart(data, boundary, headers, stream)
+            body = await generator.__anext__()
+            headers['Content-Length'] = str(len(body))
 
     max_redirects = 30
     while True:
@@ -527,7 +550,7 @@ async def request(url: str, method: str = 'GET', headers: HeadersType = None,
             response = await asyncio.wait_for(
                 _do_request(
                     urlparsed, headers_data, connector, body, verify, ssl,
-                    timeouts, follow),
+                    timeouts, follow, stream),
                 timeout=(timeouts or connector.timeouts).request_timeout
             )
 

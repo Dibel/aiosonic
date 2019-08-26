@@ -209,6 +209,22 @@ async def test_post_multipart_to_django(live_server):
 
 
 @pytest.mark.asyncio
+async def test_post_multipart_stream(app, aiohttp_server):
+    """Test post multipart."""
+    server = await aiohttp_server(app)
+    url = 'http://localhost:%d/post' % server.port
+    data = {
+        'foo': open('tests/files/bar.txt', 'rb'),
+        'field1': 'foo'
+    }
+
+    res = await aiosonic.post(url, data=data, multipart=True, stream=True)
+    assert res.status_code == 200
+    assert await res.text() == 'bar-foo'
+    await server.close()
+
+
+@pytest.mark.asyncio
 async def test_connect_timeout(mocker):
     """Test connect timeout."""
     url = 'http://localhost:1234'
